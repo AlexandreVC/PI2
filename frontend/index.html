@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VulnAI - Vulnerability Analysis Platform</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar">
+        <div class="sidebar-header">
+            <div class="logo">
+                <i class="fas fa-shield-alt"></i>
+                <span>VulnAI</span>
+            </div>
+            <span class="version">v1.0</span>
+        </div>
+
+        <nav class="sidebar-nav">
+            <a href="#" class="nav-item active" data-page="dashboard">
+                <i class="fas fa-chart-line"></i>
+                <span>Dashboard</span>
+            </a>
+            <a href="#" class="nav-item" data-page="vulnerabilities">
+                <i class="fas fa-bug"></i>
+                <span>Vulnerabilities</span>
+            </a>
+            <a href="#" class="nav-item" data-page="hosts">
+                <i class="fas fa-server"></i>
+                <span>Hosts</span>
+            </a>
+            <a href="#" class="nav-item" data-page="scans">
+                <i class="fas fa-crosshairs"></i>
+                <span>Scans</span>
+            </a>
+            <a href="#" class="nav-item" data-page="reports">
+                <i class="fas fa-file-alt"></i>
+                <span>Reports</span>
+            </a>
+            <a href="#" class="nav-item" data-page="mitre">
+                <i class="fas fa-sitemap"></i>
+                <span>MITRE ATT&CK</span>
+            </a>
+        </nav>
+
+        <div class="sidebar-footer">
+            <div class="ai-status" id="ollama-status">
+                <div class="status-indicator" id="ollama-indicator"></div>
+                <span id="ollama-text">Checking Ollama...</span>
+            </div>
+            <div class="data-source">
+                <i class="fas fa-robot"></i>
+                <span>AI Code Scanner</span>
+            </div>
+            <div class="data-source-row">
+                <div class="data-source nvd">
+                    <i class="fas fa-database"></i>
+                    <span>NVD API</span>
+                </div>
+                <button class="btn-refresh" id="refresh-nvd" title="Fetch CVEs from NVD">
+                    <i class="fas fa-sync-alt"></i>
+                </button>
+            </div>
+            <div class="data-source-row">
+                <div class="data-source mitre">
+                    <i class="fas fa-sitemap"></i>
+                    <span>MITRE ATT&CK</span>
+                </div>
+                <button class="btn-refresh" id="refresh-mitre" title="Fetch MITRE ATT&CK data">
+                    <i class="fas fa-sync-alt"></i>
+                </button>
+            </div>
+            <div class="scan-info" id="scan-info">
+                <small class="text-muted">Scans: <span id="scan-count">0</span> | Vulns: <span id="vuln-count">0</span></small>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <!-- Header -->
+        <header class="top-header">
+            <div class="header-left">
+                <button class="menu-toggle">
+                    <i class="fas fa-bars"></i>
+                </button>
+                <div class="breadcrumb">
+                    <span id="current-page-title">Dashboard</span>
+                </div>
+            </div>
+            <div class="header-right">
+                <div class="search-box">
+                    <i class="fas fa-search"></i>
+                    <input type="text" placeholder="Search vulnerabilities..." id="global-search">
+                </div>
+                <button class="btn btn-primary" id="new-scan-btn">
+                    <i class="fas fa-plus"></i>
+                    New Scan
+                </button>
+                <div class="notifications">
+                    <i class="fas fa-bell"></i>
+                    <span class="badge">3</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Page Content Container -->
+        <div class="page-content">
+            <!-- Dashboard Page -->
+            <section id="dashboard-page" class="page active">
+                <!-- Stats Cards -->
+                <div class="stats-grid">
+                    <div class="stat-card risk-score" id="risk-score-card">
+                        <div class="stat-icon">
+                            <i class="fas fa-exclamation-triangle"></i>
+                        </div>
+                        <div class="stat-content">
+                            <span class="stat-label">Risk Score</span>
+                            <span class="stat-value" id="risk-score">--</span>
+                            <span class="risk-level-badge" id="risk-level-badge">--</span>
+                        </div>
+                        <div class="stat-chart">
+                            <svg viewBox="0 0 36 36" class="circular-chart">
+                                <path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+                                <path class="circle" stroke-dasharray="0, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" id="risk-circle"/>
+                            </svg>
+                        </div>
+                        <div class="risk-breakdown" id="risk-breakdown">
+                            <div class="risk-breakdown-title">Score Breakdown</div>
+                            <div class="risk-breakdown-item">
+                                <span class="breakdown-label">CVSS Impact</span>
+                                <span class="breakdown-value" id="cvss-contribution">--</span>
+                            </div>
+                            <div class="risk-breakdown-item">
+                                <span class="breakdown-label">Business Impact</span>
+                                <span class="breakdown-value" id="business-contribution">--</span>
+                            </div>
+                            <div class="risk-breakdown-item">
+                                <span class="breakdown-label">Exploitability</span>
+                                <span class="breakdown-value" id="exploit-contribution">--</span>
+                            </div>
+                            <div class="risk-breakdown-item">
+                                <span class="breakdown-label">Asset Criticality</span>
+                                <span class="breakdown-value" id="asset-contribution">--</span>
+                            </div>
+                            <div class="risk-breakdown-divider"></div>
+                            <div class="risk-breakdown-item cvss-info">
+                                <span class="breakdown-label">Max CVSS</span>
+                                <span class="breakdown-value" id="cvss-max">--</span>
+                            </div>
+                            <div class="risk-breakdown-item cvss-info">
+                                <span class="breakdown-label">Avg CVSS</span>
+                                <span class="breakdown-value" id="cvss-avg">--</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-icon critical">
+                            <i class="fas fa-skull-crossbones"></i>
+                        </div>
+                        <div class="stat-content">
+                            <span class="stat-label">Critical</span>
+                            <span class="stat-value" id="critical-count">--</span>
+                        </div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-icon high">
+                            <i class="fas fa-fire"></i>
+                        </div>
+                        <div class="stat-content">
+                            <span class="stat-label">High</span>
+                            <span class="stat-value" id="high-count">--</span>
+                        </div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-icon medium">
+                            <i class="fas fa-exclamation-circle"></i>
+                        </div>
+                        <div class="stat-content">
+                            <span class="stat-label">Medium</span>
+                            <span class="stat-value" id="medium-count">--</span>
+                        </div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-icon exploitable">
+                            <i class="fas fa-crosshairs"></i>
+                        </div>
+                        <div class="stat-content">
+                            <span class="stat-label">Exploitable</span>
+                            <span class="stat-value" id="exploitable-count">--</span>
+                        </div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-icon hosts">
+                            <i class="fas fa-network-wired"></i>
+                        </div>
+                        <div class="stat-content">
+                            <span class="stat-label">Hosts Affected</span>
+                            <span class="stat-value" id="hosts-count">--</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Charts Row -->
+                <div class="charts-row">
+                    <div class="chart-card">
+                        <div class="card-header">
+                            <h3>Severity Distribution</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="severity-bars" id="severity-bars">
+                                <!-- Filled by JS -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="chart-card">
+                        <div class="card-header">
+                            <h3>Top Vulnerabilities</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="top-vulns-list" id="top-vulns">
+                                <!-- Filled by JS -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Recent Activity -->
+                <div class="activity-card">
+                    <div class="card-header">
+                        <h3>Recent Findings</h3>
+                        <a href="#" class="view-all" data-page="vulnerabilities">View All</a>
+                    </div>
+                    <div class="card-body">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Severity</th>
+                                    <th>Vulnerability</th>
+                                    <th>Host</th>
+                                    <th>CVSS</th>
+                                    <th>Exploit</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody id="recent-vulns">
+                                <!-- Filled by JS -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Vulnerabilities Page -->
+            <section id="vulnerabilities-page" class="page">
+                <div class="page-header">
+                    <h2>Vulnerabilities</h2>
+                    <div class="page-actions">
+                        <button class="btn btn-secondary" id="export-vulns">
+                            <i class="fas fa-download"></i> Export
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Filters -->
+                <div class="filters-bar">
+                    <div class="filter-group">
+                        <label>Severity</label>
+                        <div class="filter-chips" id="severity-filter">
+                            <button class="chip active" data-value="all">All</button>
+                            <button class="chip critical" data-value="critical">Critical</button>
+                            <button class="chip high" data-value="high">High</button>
+                            <button class="chip medium" data-value="medium">Medium</button>
+                            <button class="chip low" data-value="low">Low</button>
+                        </div>
+                    </div>
+                    <div class="filter-group">
+                        <label>Exploitable</label>
+                        <select id="exploit-filter">
+                            <option value="">All</option>
+                            <option value="true">Yes</option>
+                            <option value="false">No</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label>Host</label>
+                        <select id="host-filter">
+                            <option value="">All Hosts</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Vulnerabilities Table -->
+                <div class="table-card">
+                    <table class="data-table full-width">
+                        <thead>
+                            <tr>
+                                <th class="sortable" data-sort="severity">Severity <i class="fas fa-sort"></i></th>
+                                <th class="sortable" data-sort="title">Vulnerability <i class="fas fa-sort"></i></th>
+                                <th>CVE</th>
+                                <th class="sortable" data-sort="cvss_score">CVSS <i class="fas fa-sort"></i></th>
+                                <th class="sortable" data-sort="host">Host <i class="fas fa-sort"></i></th>
+                                <th>Port</th>
+                                <th>Exploit</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="vulns-table-body">
+                            <!-- Filled by JS -->
+                        </tbody>
+                    </table>
+
+                    <div class="pagination" id="vulns-pagination">
+                        <!-- Filled by JS -->
+                    </div>
+                </div>
+            </section>
+
+            <!-- Hosts Page -->
+            <section id="hosts-page" class="page">
+                <div class="page-header">
+                    <h2>Affected Hosts</h2>
+                </div>
+
+                <div class="hosts-grid" id="hosts-grid">
+                    <!-- Filled by JS -->
+                </div>
+            </section>
+
+            <!-- Scans Page -->
+            <section id="scans-page" class="page">
+                <div class="page-header">
+                    <h2>Scan Management</h2>
+                </div>
+
+                <!-- Project Selector -->
+                <div class="project-section">
+                    <div class="project-header">
+                        <h3><i class="fas fa-folder-open"></i> Projects</h3>
+                        <div class="project-actions">
+                            <button class="btn btn-sm btn-secondary" id="new-project-btn">
+                                <i class="fas fa-plus"></i> New Project
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="project-list" id="project-list">
+                        <!-- Filled by JS -->
+                    </div>
+                </div>
+
+                <!-- Create Project Modal -->
+                <div class="modal" id="create-project-modal">
+                    <div class="modal-overlay"></div>
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h3>Create New Project</h3>
+                            <button class="modal-close" id="close-project-modal"><i class="fas fa-times"></i></button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="form-group">
+                                <label>Project Name</label>
+                                <input type="text" id="project-name-input" placeholder="e.g., My Web App">
+                            </div>
+                            <div class="form-group">
+                                <label>Description (optional)</label>
+                                <textarea id="project-desc-input" placeholder="Brief description of the project"></textarea>
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            <button class="btn btn-secondary" id="cancel-project-btn">Cancel</button>
+                            <button class="btn btn-primary" id="confirm-project-btn">Create Project</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Selected Project Files -->
+                <div class="project-files-section hidden" id="project-files-section">
+                    <div class="project-files-header">
+                        <div class="project-info">
+                            <h3><i class="fas fa-project-diagram"></i> <span id="selected-project-name">Project</span></h3>
+                            <span class="project-file-count" id="project-file-count">0 files</span>
+                        </div>
+                        <div class="project-file-actions">
+                            <input type="file" id="project-file-input" accept=".py,.js,.ts,.jsx,.tsx,.java,.php,.rb,.go,.c,.cpp,.cs,.sql,.html,.xml,.yaml,.yml,.json,.env,.conf,.ini,.nessus,.txt,.md,.sh,.bash" multiple hidden>
+                            <button class="btn btn-sm btn-secondary" id="upload-to-project-btn">
+                                <i class="fas fa-upload"></i> Upload Files
+                            </button>
+                            <select id="scan-model" class="model-select">
+                                <option value="mistral">Mistral (Default)</option>
+                                <option value="codellama">CodeLlama</option>
+                                <option value="llama3">Llama 3</option>
+                                <option value="phi">Phi</option>
+                            </select>
+                            <button class="btn btn-sm btn-primary" id="scan-selected-btn" disabled>
+                                <i class="fas fa-search"></i> Scan Selected
+                            </button>
+                            <button class="btn btn-sm btn-primary" id="scan-all-btn">
+                                <i class="fas fa-play"></i> Scan All
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="file-browser" id="file-browser">
+                        <div class="file-browser-header">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="select-all-files">
+                                <span>Select All</span>
+                            </label>
+                            <span class="selected-count" id="selected-files-count">0 selected</span>
+                        </div>
+                        <div class="file-list" id="project-file-list">
+                            <!-- Filled by JS -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Scan History -->
+                <div class="table-card">
+                    <div class="card-header">
+                        <h3>Scan History</h3>
+                    </div>
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Scan ID</th>
+                                <th>Source</th>
+                                <th>Files</th>
+                                <th>Vulnerabilities</th>
+                                <th>Date</th>
+                            </tr>
+                        </thead>
+                        <tbody id="scans-table-body">
+                            <!-- Filled by JS -->
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Analysis Progress -->
+                <div class="analysis-progress hidden" id="analysis-progress">
+                    <div class="progress-header">
+                        <h3>Analysis in Progress</h3>
+                        <span id="analysis-status">Initializing...</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progress-fill" style="width: 0%"></div>
+                    </div>
+                    <p id="analysis-message">Starting vulnerability analysis...</p>
+                </div>
+            </section>
+
+            <!-- Reports Page -->
+            <section id="reports-page" class="page">
+                <div class="page-header">
+                    <h2>Security Reports</h2>
+                </div>
+
+                <!-- Report Generation -->
+                <div class="report-generator">
+                    <div class="report-options">
+                        <div class="report-type-card" data-type="executive">
+                            <i class="fas fa-user-tie"></i>
+                            <h4>Executive Report</h4>
+                            <p>High-level summary for management and decision makers</p>
+                        </div>
+                        <div class="report-type-card" data-type="technical">
+                            <i class="fas fa-code"></i>
+                            <h4>Technical Report</h4>
+                            <p>Detailed findings for security administrators</p>
+                        </div>
+                        <div class="report-type-card selected" data-type="both">
+                            <i class="fas fa-layer-group"></i>
+                            <h4>Both Reports</h4>
+                            <p>Generate executive and technical reports</p>
+                        </div>
+                    </div>
+
+                    <div class="report-config">
+                        <div class="form-group">
+                            <label>Organization Name</label>
+                            <input type="text" id="org-name" value="Organization" placeholder="Enter organization name">
+                        </div>
+                        <button class="btn btn-primary btn-lg" id="generate-report-btn">
+                            <i class="fas fa-file-export"></i> Generate Report
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Available Reports -->
+                <div class="table-card">
+                    <div class="card-header">
+                        <h3>Available Reports</h3>
+                    </div>
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Report</th>
+                                <th>Type</th>
+                                <th>Generated</th>
+                                <th>Size</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="reports-table-body">
+                            <!-- Filled by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- MITRE ATT&CK Page -->
+            <section id="mitre-page" class="page">
+                <div class="page-header">
+                    <h2>MITRE ATT&CK Database</h2>
+                    <div class="page-actions">
+                        <div class="search-box mitre-search">
+                            <i class="fas fa-search"></i>
+                            <input type="text" placeholder="Search MITRE ATT&CK..." id="mitre-search">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- MITRE Tabs -->
+                <div class="mitre-tabs">
+                    <button class="mitre-tab active" data-tab="tactics">
+                        <i class="fas fa-chess-board"></i>
+                        <span>Tactics</span>
+                        <span class="tab-count" id="tactics-count">0</span>
+                    </button>
+                    <button class="mitre-tab" data-tab="techniques">
+                        <i class="fas fa-cogs"></i>
+                        <span>Techniques</span>
+                        <span class="tab-count" id="techniques-count">0</span>
+                    </button>
+                    <button class="mitre-tab" data-tab="groups">
+                        <i class="fas fa-users-cog"></i>
+                        <span>Threat Groups</span>
+                        <span class="tab-count" id="groups-count">0</span>
+                    </button>
+                    <button class="mitre-tab" data-tab="software">
+                        <i class="fas fa-virus"></i>
+                        <span>Malware & Tools</span>
+                        <span class="tab-count" id="software-count">0</span>
+                    </button>
+                    <button class="mitre-tab" data-tab="mitigations">
+                        <i class="fas fa-shield-alt"></i>
+                        <span>Mitigations</span>
+                        <span class="tab-count" id="mitigations-count">0</span>
+                    </button>
+                </div>
+
+                <!-- Tab Content -->
+                <div class="mitre-tab-content">
+                    <div class="mitre-panel active" id="tactics-panel">
+                        <div class="mitre-grid" id="mitre-grid">
+                            <!-- Filled by JS -->
+                        </div>
+                    </div>
+                    <div class="mitre-panel" id="techniques-panel">
+                        <div class="techniques-list" id="techniques-list">
+                            <!-- Filled by JS -->
+                        </div>
+                    </div>
+                    <div class="mitre-panel" id="groups-panel">
+                        <div class="groups-grid" id="groups-grid">
+                            <!-- Filled by JS -->
+                        </div>
+                    </div>
+                    <div class="mitre-panel" id="software-panel">
+                        <div class="software-grid" id="software-grid">
+                            <!-- Filled by JS -->
+                        </div>
+                    </div>
+                    <div class="mitre-panel" id="mitigations-panel">
+                        <div class="mitigations-list" id="mitigations-list">
+                            <!-- Filled by JS -->
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <!-- Vulnerability Detail Modal -->
+    <div class="modal" id="vuln-modal">
+        <div class="modal-overlay"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modal-title">Vulnerability Details</h2>
+                <button class="modal-close"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="modal-body" id="modal-body">
+                <!-- Filled by JS -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

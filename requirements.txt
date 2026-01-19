@@ -1,0 +1,19 @@
+# Agent IA Génératif - Analyse de Vulnérabilités
+# ESILV PI2 Project
+
+# Core dependencies
+requests>=2.28.0
+
+# Web Interface dependencies
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+
+# Optional: For enhanced functionality
+# openai>=1.0.0  # If using OpenAI API instead of Ollama
+
+# Development dependencies
+# pytest>=7.0.0
+# pytest-cov>=4.0.0
+# black>=23.0.0
+# mypy>=1.0.0
