@@ -167,7 +167,7 @@ model_routing = {
     "simple": "phi-4",
     "medium": "phi-4",
     "complex": "mistral-small",
-    "very_complex": "qwen2.5-coder:32b"
+    "very_complex": "gpt-oss-20b"
 }
 ```
 
