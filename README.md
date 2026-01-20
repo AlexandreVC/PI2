@@ -48,7 +48,7 @@ Le module de routage analyse la complexité de la tâche pour sélectionner le m
 |---------------|------------|-------------------|--------|
 | Parsing Logs / Nmap | Simple | Phi-4 | Rapidité (~13 sec) |
 | Analyse Nessus | Moyenne | Phi-4 | Bonne capacité de synthèse |
-| Corrélation MITRE | Complexe | Mistral Small | Raisonnement contextuel fort |
+| Corrélation MITRE | Complexe | gpt-oss-20b | Raisonnement contextuel fort |
 | Génération Exploit/Script | Très Complexe | gpt-oss-20b | Spécialisation Code & Syntaxe |
 
 ## Installation
@@ -109,7 +109,7 @@ python main.py --demo
 python main.py --nmap data/scans/scan.xml --nessus data/scans/scan.nessus --org "Nom Organisation"
 
 # Avec analyse IA activée
-python main.py --nmap scan.xml --ai --model mistral-small
+python main.py --nmap scan.xml --ai --model gpt-oss-20b
 ```
 
 ### Utilisation en Python
@@ -164,7 +164,7 @@ temperature = 0.0
 model_routing = {
     "simple": "phi-4",
     "medium": "phi-4",
-    "complex": "mistral-small",
+    "complex": "gpt-oss-20b",
     "very_complex": "gpt-oss-20b"
 }
 ```
