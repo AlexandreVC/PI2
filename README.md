@@ -2,8 +2,6 @@
 
 ## ESILV PI2 Project
 
-**Encadrant / PO:** Mohamed BELAOUED
-
 ---
 
 ## Description
