@@ -51,7 +51,7 @@ Le module de routage analyse la complexité de la tâche pour sélectionner le m
 | Parsing Logs / Nmap | Simple | Phi-4 | Rapidité (~13 sec) |
 | Analyse Nessus | Moyenne | Phi-4 | Bonne capacité de synthèse |
 | Corrélation MITRE | Complexe | Mistral Small | Raisonnement contextuel fort |
-| Génération Exploit/Script | Très Complexe | Qwen Coder 32B | Spécialisation Code & Syntaxe |
+| Génération Exploit/Script | Très Complexe | gpt-oss-20b | Spécialisation Code & Syntaxe |
 
 ## Installation
 
