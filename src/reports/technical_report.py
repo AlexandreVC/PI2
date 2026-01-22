@@ -233,6 +233,33 @@ class TechnicalReportGenerator(BaseReportGenerator):
 
     def _format_vulnerability_details(self, index: int, vuln: Vulnerability) -> str:
         """Format single vulnerability details."""
+        # Build location info
+        location_info = ""
+        if vuln.affected_file:
+            location_info = f"- File: `{vuln.affected_file}`\n"
+            if vuln.location:
+                location_info += f"- Location: {vuln.location}\n"
+
+        # Build vulnerable code section
+        vulnerable_code_section = ""
+        if vuln.vulnerable_code:
+            vulnerable_code_section = f"""
+**Vulnerable Code:**
+```
+{vuln.vulnerable_code}
+```
+"""
+
+        # Build fixed code section
+        fixed_code_section = ""
+        if vuln.fixed_code:
+            fixed_code_section = f"""
+**Fixed Code:**
+```
+{vuln.fixed_code}
+```
+"""
+
         return f"""### 4.{index}. {vuln.title}
 
 **Identifiers:**
@@ -250,13 +277,14 @@ class TechnicalReportGenerator(BaseReportGenerator):
 - Service: {vuln.affected_service}
 - Product: {vuln.affected_product or "N/A"}
 - Version: {vuln.affected_version or "N/A"}
-
+{location_info}
 **Description:**
 {vuln.description or "No description available."}
-
+{vulnerable_code_section}
 **Exploit Status:**
 - Exploit Available: {"Yes" if vuln.exploit_available else "No"}
 - Exploitability: {vuln.exploitability or "Unknown"}
+- Patch Available: {"Yes" if vuln.patch_available else "No"}
 
 **MITRE ATT&CK:**
 - Tactics: {", ".join(vuln.mitre_tactics) if vuln.mitre_tactics else "N/A"}
@@ -267,7 +295,7 @@ class TechnicalReportGenerator(BaseReportGenerator):
 
 **Remediation:**
 {vuln.remediation if vuln.remediation else "See remediation guide."}
-
+{fixed_code_section}
 **References:**
 {self._format_references(vuln.references)}
 
