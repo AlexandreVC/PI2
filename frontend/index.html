@@ -274,6 +274,12 @@
                 <!-- Filters -->
                 <div class="filters-bar">
                     <div class="filter-group">
+                        <label>Project</label>
+                        <select id="vuln-project-filter">
+                            <option value="">All Projects</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
                         <label>Severity</label>
                         <div class="filter-chips" id="severity-filter">
                             <button class="chip active" data-value="all">All</button>
@@ -329,6 +335,14 @@
             <section id="hosts-page" class="page">
                 <div class="page-header">
                     <h2>Affected Hosts</h2>
+                    <div class="page-actions">
+                        <div class="filter-group">
+                            <label>Project</label>
+                            <select id="hosts-project-filter">
+                                <option value="">All Projects</option>
+                            </select>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="hosts-grid" id="hosts-grid">
@@ -486,6 +500,12 @@
 
                     <div class="report-config">
                         <div class="form-group">
+                            <label>Project (optional)</label>
+                            <select id="report-project-filter">
+                                <option value="">All Projects (Global Report)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
                             <label>Organization Name</label>
                             <input type="text" id="org-name" value="Organization" placeholder="Enter organization name">
                         </div>
@@ -505,6 +525,7 @@
                             <tr>
                                 <th>Report</th>
                                 <th>Type</th>
+                                <th>Project</th>
                                 <th>Generated</th>
                                 <th>Size</th>
                                 <th>Actions</th>

@@ -128,8 +128,10 @@ class DataManager:
         self.store.reports.append(report_info)
         self.save_results()
 
-    def get_vulnerabilities(self) -> List[Dict[str, Any]]:
-        """Get all discovered vulnerabilities."""
+    def get_vulnerabilities(self, project_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Get discovered vulnerabilities, optionally filtered by project."""
+        if project_id:
+            return [v for v in self.store.vulnerabilities if v.get("project_id") == project_id]
         return self.store.vulnerabilities
 
     def get_vulnerability(self, vuln_id: str) -> Optional[Dict[str, Any]]:
@@ -161,9 +163,9 @@ class DataManager:
         """Get generated reports."""
         return self.store.reports
 
-    def get_stats(self) -> Dict[str, Any]:
-        """Get dashboard statistics with advanced risk scoring."""
-        vulns = self.store.vulnerabilities
+    def get_stats(self, project_id: Optional[str] = None) -> Dict[str, Any]:
+        """Get dashboard statistics with advanced risk scoring, optionally filtered by project."""
+        vulns = self.get_vulnerabilities(project_id)
 
         severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
         for v in vulns:
@@ -210,16 +212,18 @@ class DataManager:
 
         return {"tactics": tactics_data}
 
-    def get_hosts_summary(self) -> List[Dict[str, Any]]:
-        """Get affected hosts summary."""
+    def get_hosts_summary(self, project_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Get affected hosts summary, optionally filtered by project."""
         hosts_data = {}
 
-        for v in self.store.vulnerabilities:
+        vulns = self.get_vulnerabilities(project_id)
+        for v in vulns:
             host = v.get("affected_host", "")
             if host:
                 if host not in hosts_data:
                     hosts_data[host] = {
                         "ip": host,
+                        "project_id": v.get("project_id"),
                         "vulnerabilities": [],
                         "severity_counts": {"critical": 0, "high": 0, "medium": 0, "low": 0}
                     }

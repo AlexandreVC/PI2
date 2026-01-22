@@ -19,7 +19,8 @@ const state = {
     filters: {
         severity: 'all',
         file: '',
-        search: ''
+        search: '',
+        projectId: ''  // Project filter for vulnerabilities
     },
     pagination: {
         page: 1,
@@ -29,6 +30,8 @@ const state = {
     sortBy: 'severity',
     sortOrder: 'desc',
     selectedReportType: 'both',
+    selectedReportProject: '',  // Project filter for reports
+    selectedHostsProject: '',   // Project filter for hosts
     currentScanJob: null,
     // Project management
     projects: [],
@@ -511,6 +514,16 @@ async function loadRecentVulnerabilities() {
 // ========================================
 
 function initFilters() {
+    // Project filter for vulnerabilities
+    const vulnProjectFilter = document.getElementById('vuln-project-filter');
+    if (vulnProjectFilter) {
+        vulnProjectFilter.addEventListener('change', (e) => {
+            state.filters.projectId = e.target.value;
+            state.pagination.page = 1;
+            loadVulnerabilities();
+        });
+    }
+
     // Severity filter chips
     document.getElementById('severity-filter').addEventListener('click', (e) => {
         if (e.target.classList.contains('chip')) {
@@ -552,6 +565,23 @@ function initFilters() {
 
     // Export button
     document.getElementById('export-vulns').addEventListener('click', exportVulnerabilities);
+
+    // Project filter for hosts
+    const hostsProjectFilter = document.getElementById('hosts-project-filter');
+    if (hostsProjectFilter) {
+        hostsProjectFilter.addEventListener('change', (e) => {
+            state.selectedHostsProject = e.target.value;
+            loadHosts();
+        });
+    }
+
+    // Project filter for reports
+    const reportProjectFilter = document.getElementById('report-project-filter');
+    if (reportProjectFilter) {
+        reportProjectFilter.addEventListener('change', (e) => {
+            state.selectedReportProject = e.target.value;
+        });
+    }
 }
 
 async function loadVulnerabilities() {
@@ -563,6 +593,9 @@ async function loadVulnerabilities() {
             sort_order: state.sortOrder
         });
 
+        if (state.filters.projectId) {
+            params.append('project_id', state.filters.projectId);
+        }
         if (state.filters.severity !== 'all') {
             params.append('severity', state.filters.severity);
         }
@@ -576,6 +609,9 @@ async function loadVulnerabilities() {
         const response = await fetchAPI(`/vulnerabilities?${params}`);
         state.vulnerabilities = response.items;
         state.pagination.total = response.total;
+
+        // Populate project filter dropdown
+        await populateProjectFilters();
 
         renderVulnerabilitiesTable(response.items);
         renderPagination(response);
@@ -915,7 +951,14 @@ function escapeHtml(text) {
 
 async function loadHosts() {
     try {
-        const response = await fetchAPI('/hosts');
+        // Load projects for the filter dropdown
+        await populateProjectFilters();
+
+        let url = '/hosts';
+        if (state.selectedHostsProject) {
+            url += `?project_id=${state.selectedHostsProject}`;
+        }
+        const response = await fetchAPI(url);
         renderHostsGrid(response.hosts);
     } catch (error) {
         showToast('Error', 'Failed to load files', 'error');
@@ -1553,10 +1596,52 @@ function initReportGenerator() {
 
 async function loadReports() {
     try {
+        // Load projects for the filter dropdown
+        await populateProjectFilters();
+
         const response = await fetchAPI('/reports');
         renderReportsTable(response.reports);
     } catch (error) {
         console.error('Failed to load reports:', error);
+    }
+}
+
+async function populateProjectFilters() {
+    try {
+        // Fetch projects if not already loaded
+        if (state.projects.length === 0) {
+            const response = await fetchAPI('/projects');
+            state.projects = response.projects || [];
+        }
+
+        // Populate vulnerabilities project filter
+        const vulnProjectFilter = document.getElementById('vuln-project-filter');
+        if (vulnProjectFilter) {
+            const currentValue = vulnProjectFilter.value;
+            vulnProjectFilter.innerHTML = '<option value="">All Projects</option>' +
+                state.projects.map(p => `<option value="${p.id}">${escapeHtml(p.name)} (${p.vulnerability_count || 0} vulns)</option>`).join('');
+            vulnProjectFilter.value = currentValue;
+        }
+
+        // Populate hosts project filter
+        const hostsProjectFilter = document.getElementById('hosts-project-filter');
+        if (hostsProjectFilter) {
+            const currentValue = hostsProjectFilter.value;
+            hostsProjectFilter.innerHTML = '<option value="">All Projects</option>' +
+                state.projects.map(p => `<option value="${p.id}">${escapeHtml(p.name)} (${p.vulnerability_count || 0} vulns)</option>`).join('');
+            hostsProjectFilter.value = currentValue;
+        }
+
+        // Populate reports project filter
+        const reportProjectFilter = document.getElementById('report-project-filter');
+        if (reportProjectFilter) {
+            const currentValue = reportProjectFilter.value;
+            reportProjectFilter.innerHTML = '<option value="">All Projects (Global Report)</option>' +
+                state.projects.map(p => `<option value="${p.id}">${escapeHtml(p.name)} (${p.vulnerability_count || 0} vulns)</option>`).join('');
+            reportProjectFilter.value = currentValue;
+        }
+    } catch (error) {
+        console.error('Failed to populate project filters:', error);
     }
 }
 
@@ -1566,7 +1651,7 @@ function renderReportsTable(reports) {
     if (reports.length === 0) {
         tbody.innerHTML = `
             <tr>
-                <td colspan="5" class="text-center text-muted" style="padding: 2rem;">
+                <td colspan="6" class="text-center text-muted" style="padding: 2rem;">
                     <i class="fas fa-file-alt" style="font-size: 2rem; margin-bottom: 1rem; display: block;"></i>
                     No reports generated yet<br>
                     <small>Run a scan first, then generate reports</small>
@@ -1576,7 +1661,9 @@ function renderReportsTable(reports) {
         return;
     }
 
-    tbody.innerHTML = reports.map(report => `
+    tbody.innerHTML = reports.map(report => {
+        const projectName = report.project_name || (report.project_id ? report.project_id : 'Global');
+        return `
         <tr>
             <td>
                 <i class="fas fa-file-alt" style="margin-right: 0.5rem; color: var(--accent-primary);"></i>
@@ -1587,6 +1674,12 @@ function renderReportsTable(reports) {
                     ${capitalize(report.type)}
                 </span>
             </td>
+            <td>
+                <span class="project-badge">
+                    <i class="fas fa-folder"></i>
+                    ${escapeHtml(projectName)}
+                </span>
+            </td>
             <td>${formatDate(report.generated_at)}</td>
             <td class="font-mono">${report.size ? formatBytes(report.size) : '-'}</td>
             <td>
@@ -1595,28 +1688,46 @@ function renderReportsTable(reports) {
                 </a>
             </td>
         </tr>
-    `).join('');
+    `;
+    }).join('');
 }
 
 async function generateReport() {
     const org = document.getElementById('org-name').value || 'Organization';
+    const projectId = document.getElementById('report-project-filter')?.value || '';
 
     try {
-        showToast('Generating', 'AI is generating reports...', 'info');
+        const projectName = projectId ? state.projects.find(p => p.id === projectId)?.name : '';
+        const message = projectName ? `AI is generating reports for project "${projectName}"...` : 'AI is generating global reports...';
+        showToast('Generating', message, 'info');
+
+        const requestBody = {
+            organization: org,
+            report_type: state.selectedReportType
+        };
+
+        if (projectId) {
+            requestBody.project_id = projectId;
+        }
 
         const response = await fetchAPI('/reports/generate', {
             method: 'POST',
-            body: JSON.stringify({
-                organization: org,
-                report_type: state.selectedReportType
-            })
+            body: JSON.stringify(requestBody)
         });
 
-        showToast('Success', `Generated ${response.reports.length} report(s)`, 'success');
+        const successMessage = projectName
+            ? `Generated ${response.reports.length} report(s) for project "${projectName}"`
+            : `Generated ${response.reports.length} report(s)`;
+        showToast('Success', successMessage, 'success');
         loadReports();
     } catch (error) {
         if (error.message.includes('400')) {
-            showToast('No Data', 'Run a scan first to find vulnerabilities', 'warning');
+            const projectId = document.getElementById('report-project-filter')?.value;
+            if (projectId) {
+                showToast('No Data', 'No vulnerabilities found for this project. Run a scan first.', 'warning');
+            } else {
+                showToast('No Data', 'Run a scan first to find vulnerabilities', 'warning');
+            }
         } else {
             showToast('Error', 'Failed to generate reports', 'error');
         }

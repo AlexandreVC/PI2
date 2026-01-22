@@ -77,7 +77,9 @@ class AIReporter:
     def generate_executive_report(
         self,
         vulnerabilities: List[Dict[str, Any]],
-        organization: Optional[str] = None
+        organization: Optional[str] = None,
+        project_id: Optional[str] = None,
+        project_name: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Generate an executive summary report.
@@ -85,6 +87,8 @@ class AIReporter:
         Args:
             vulnerabilities: List of discovered vulnerabilities
             organization: Organization name
+            project_id: Optional project ID for filtering
+            project_name: Optional project name for display
 
         Returns:
             Report information including content and file path
@@ -96,17 +100,20 @@ class AIReporter:
         stats = self._calculate_stats(vulnerabilities)
 
         # Build prompt for executive report
-        prompt = self._build_executive_prompt(vulnerabilities, stats, org)
+        prompt = self._build_executive_prompt(vulnerabilities, stats, org, project_name)
 
         logger.info(f"Generating executive report with AI ({self.config.model})...")
         content = self._call_ollama(prompt)
 
         if not content:
             # Fallback to template-based report
-            content = self._generate_executive_fallback(vulnerabilities, stats, org, timestamp)
+            content = self._generate_executive_fallback(vulnerabilities, stats, org, timestamp, project_name)
 
-        # Save report
-        filename = f"executive_report_{timestamp.strftime('%Y%m%d_%H%M%S')}.md"
+        # Save report with project prefix if applicable
+        if project_id:
+            filename = f"{project_id}_executive_report_{timestamp.strftime('%Y%m%d_%H%M%S')}.md"
+        else:
+            filename = f"executive_report_{timestamp.strftime('%Y%m%d_%H%M%S')}.md"
         filepath = self.reports_dir / filename
 
         with open(filepath, 'w', encoding='utf-8') as f:
@@ -117,6 +124,8 @@ class AIReporter:
             'filename': filename,
             'filepath': str(filepath),
             'organization': org,
+            'project_id': project_id,
+            'project_name': project_name,
             'generated_at': timestamp.isoformat(),
             'vulnerability_count': len(vulnerabilities),
             'risk_score': stats['risk_score'],
@@ -126,7 +135,9 @@ class AIReporter:
     def generate_technical_report(
         self,
         vulnerabilities: List[Dict[str, Any]],
-        organization: Optional[str] = None
+        organization: Optional[str] = None,
+        project_id: Optional[str] = None,
+        project_name: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Generate a detailed technical report.
@@ -134,6 +145,8 @@ class AIReporter:
         Args:
             vulnerabilities: List of discovered vulnerabilities
             organization: Organization name
+            project_id: Optional project ID for filtering
+            project_name: Optional project name for display
 
         Returns:
             Report information including content and file path
@@ -144,17 +157,20 @@ class AIReporter:
         stats = self._calculate_stats(vulnerabilities)
 
         # Build prompt for technical report
-        prompt = self._build_technical_prompt(vulnerabilities, stats, org)
+        prompt = self._build_technical_prompt(vulnerabilities, stats, org, project_name)
 
         logger.info(f"Generating technical report with AI ({self.config.model})...")
         content = self._call_ollama(prompt)
 
         if not content:
             # Fallback to template-based report
-            content = self._generate_technical_fallback(vulnerabilities, stats, org, timestamp)
+            content = self._generate_technical_fallback(vulnerabilities, stats, org, timestamp, project_name)
 
-        # Save report
-        filename = f"technical_report_{timestamp.strftime('%Y%m%d_%H%M%S')}.md"
+        # Save report with project prefix if applicable
+        if project_id:
+            filename = f"{project_id}_technical_report_{timestamp.strftime('%Y%m%d_%H%M%S')}.md"
+        else:
+            filename = f"technical_report_{timestamp.strftime('%Y%m%d_%H%M%S')}.md"
         filepath = self.reports_dir / filename
 
         with open(filepath, 'w', encoding='utf-8') as f:
@@ -165,6 +181,8 @@ class AIReporter:
             'filename': filename,
             'filepath': str(filepath),
             'organization': org,
+            'project_id': project_id,
+            'project_name': project_name,
             'generated_at': timestamp.isoformat(),
             'vulnerability_count': len(vulnerabilities),
             'model': self.config.model
@@ -222,7 +240,8 @@ class AIReporter:
         self,
         vulnerabilities: List[Dict[str, Any]],
         stats: Dict[str, Any],
-        organization: str
+        organization: str,
+        project_name: Optional[str] = None
     ) -> str:
         """Build prompt for executive report."""
         vuln_summary = json.dumps([{
@@ -232,9 +251,11 @@ class AIReporter:
             'file': v.get('affected_file', '')
         } for v in vulnerabilities[:20]], indent=2)  # Limit for prompt size
 
+        project_info = f"\nPROJECT: {project_name}" if project_name else ""
+
         return f"""You are a cybersecurity expert writing an executive summary report.
 
-ORGANIZATION: {organization}
+ORGANIZATION: {organization}{project_info}
 DATE: {datetime.now().strftime('%Y-%m-%d')}
 
 SCAN STATISTICS:
@@ -290,7 +311,8 @@ Focus on business impact and risk, not technical details."""
         self,
         vulnerabilities: List[Dict[str, Any]],
         stats: Dict[str, Any],
-        organization: str
+        organization: str,
+        project_name: Optional[str] = None
     ) -> str:
         """Build prompt for technical report."""
         vuln_details = json.dumps([{
@@ -305,9 +327,11 @@ Focus on business impact and risk, not technical details."""
             'fixed_code': v.get('fixed_code', '')[:200]
         } for v in vulnerabilities[:30]], indent=2)
 
+        project_info = f"\nPROJECT: {project_name}" if project_name else ""
+
         return f"""You are a senior security engineer writing a detailed technical report.
 
-ORGANIZATION: {organization}
+ORGANIZATION: {organization}{project_info}
 DATE: {datetime.now().strftime('%Y-%m-%d')}
 
 SCAN STATISTICS:
@@ -369,7 +393,8 @@ Include code examples for both vulnerable code and fixed versions."""
         vulnerabilities: List[Dict[str, Any]],
         stats: Dict[str, Any],
         organization: str,
-        timestamp: datetime
+        timestamp: datetime,
+        project_name: Optional[str] = None
     ) -> str:
         """Generate executive report without AI."""
         critical_vulns = [v for v in vulnerabilities if v.get('severity') == 'critical']
@@ -379,8 +404,10 @@ Include code examples for both vulnerable code and fixed versions."""
         risk_recommendations = stats.get('risk_recommendations', [])
         risk_level = stats.get('risk_level', 'MEDIUM')
 
+        project_header = f"\n**Project:** {project_name}" if project_name else ""
+
         return f"""# Executive Security Report
-## {organization}
+## {organization}{project_header}
 **Date:** {timestamp.strftime('%Y-%m-%d %H:%M')}
 
 ---
@@ -434,7 +461,8 @@ A comprehensive security assessment has identified **{stats['total']} vulnerabil
         vulnerabilities: List[Dict[str, Any]],
         stats: Dict[str, Any],
         organization: str,
-        timestamp: datetime
+        timestamp: datetime,
+        project_name: Optional[str] = None
     ) -> str:
         """Generate technical report without AI."""
         vuln_sections = []
@@ -469,8 +497,10 @@ A comprehensive security assessment has identified **{stats['total']} vulnerabil
 """
             vuln_sections.append(section)
 
+        project_header = f"\n**Project:** {project_name}" if project_name else ""
+
         return f"""# Technical Security Report
-## {organization}
+## {organization}{project_header}
 **Date:** {timestamp.strftime('%Y-%m-%d %H:%M')}
 
 ---

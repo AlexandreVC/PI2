@@ -151,6 +151,7 @@ class ReportRequest(BaseModel):
     """Request to generate reports."""
     organization: str = "Organization"
     report_type: str = "both"  # executive, technical, both
+    project_id: Optional[str] = None  # Filter vulnerabilities by project
 
 
 class AnalysisConfig(BaseModel):
@@ -645,6 +646,7 @@ async def import_scan_to_project(
 
             for v in ai_vulns:
                 v["source_file"] = py_filename
+                v["project_id"] = project_id
         except Exception as e:
             logger.warning(f"AI scan failed: {e}")
 
@@ -658,6 +660,7 @@ async def import_scan_to_project(
         for vuln in vulnerabilities:
             vuln_dict = vuln.to_dict()
             vuln_dict['affected_file'] = f"{vuln_dict.get('affected_host', 'unknown')}:{vuln_dict.get('affected_port', 0)}"
+            vuln_dict['project_id'] = project_id
             vuln_dicts.append(vuln_dict)
 
         # Enrich if requested
@@ -846,6 +849,8 @@ async def run_ai_scan(job_id: str, request: ScanRequest):
                         vuln_dict['affected_file'] = f"{vuln_dict.get('affected_host', 'unknown')}:{vuln_dict.get('affected_port', 0)}"
                         vuln_dict['source_file'] = scan_file.name
                         vuln_dict['scan_type'] = scan_type
+                        if request.project_id:
+                            vuln_dict['project_id'] = request.project_id
                         all_vulnerabilities.append(vuln_dict)
 
                     # Generate .py file for AI analysis
@@ -885,6 +890,8 @@ async def run_ai_scan(job_id: str, request: ScanRequest):
 
                 for v in vulns:
                     v["source_file"] = file_path.name
+                    if request.project_id:
+                        v["project_id"] = request.project_id
                     all_vulnerabilities.append(v)
 
                 # Small delay to not overwhelm Ollama
@@ -1198,13 +1205,14 @@ async def get_vulnerabilities(
     type: Optional[str] = None,
     file: Optional[str] = None,
     search: Optional[str] = None,
+    project_id: Optional[str] = None,
     sort_by: str = "severity",
     sort_order: str = "desc",
     page: int = 1,
     page_size: int = 20
 ):
     """Get discovered vulnerabilities with filtering."""
-    vulns = data_manager.get_vulnerabilities().copy()
+    vulns = data_manager.get_vulnerabilities(project_id).copy()
 
     # Apply filters
     if severity:
@@ -1355,10 +1363,17 @@ async def generate_reports(request: ReportRequest):
     - executive: High-level summary for management
     - technical: Detailed findings for security teams
     - both: Generate both reports
+
+    If project_id is provided, only vulnerabilities from that project are included.
     """
-    vulns = data_manager.get_vulnerabilities()
+    vulns = data_manager.get_vulnerabilities(request.project_id)
 
     if not vulns:
+        if request.project_id:
+            raise HTTPException(
+                status_code=400,
+                detail=f"No vulnerabilities found for project '{request.project_id}'. Run a scan first."
+            )
         raise HTTPException(
             status_code=400,
             detail="No vulnerabilities to report. Run a scan first."
@@ -1367,20 +1382,28 @@ async def generate_reports(request: ReportRequest):
     ai_reporter.config.organization = request.organization
     reports = []
 
+    # Get project name if project_id is provided
+    project_name = None
+    if request.project_id:
+        project = project_manager.get_project(request.project_id)
+        if project:
+            project_name = project.name
+
     if request.report_type in ["executive", "both"]:
-        report = ai_reporter.generate_executive_report(vulns, request.organization)
+        report = ai_reporter.generate_executive_report(vulns, request.organization, request.project_id, project_name)
         data_manager.add_report(report)
         reports.append(report)
 
     if request.report_type in ["technical", "both"]:
-        report = ai_reporter.generate_technical_report(vulns, request.organization)
+        report = ai_reporter.generate_technical_report(vulns, request.organization, request.project_id, project_name)
         data_manager.add_report(report)
         reports.append(report)
 
     return {
         "status": "completed",
         "reports": reports,
-        "message": f"Generated {len(reports)} report(s)"
+        "project_id": request.project_id,
+        "message": f"Generated {len(reports)} report(s)" + (f" for project '{project_name}'" if project_name else "")
     }
 
 
@@ -1664,17 +1687,18 @@ async def search_mitre(query: str):
 # ============================================
 
 @app.get("/api/hosts")
-async def get_hosts():
-    """Get affected hosts/files summary."""
+async def get_hosts(project_id: Optional[str] = None):
+    """Get affected hosts/files summary, optionally filtered by project."""
     # For code scanning, "hosts" are really files
     files_data = {}
 
-    for v in data_manager.get_vulnerabilities():
+    for v in data_manager.get_vulnerabilities(project_id):
         file = v.get("affected_file", "Unknown")
         if file not in files_data:
             files_data[file] = {
                 "ip": file,  # Using 'ip' for frontend compatibility
                 "name": file,
+                "project_id": v.get("project_id"),
                 "vulnerabilities": [],
                 "severity_counts": {"critical": 0, "high": 0, "medium": 0, "low": 0}
             }
