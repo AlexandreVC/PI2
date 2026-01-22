@@ -47,6 +47,9 @@ from api.mitre_client import MITREClient, get_mitre_client
 from api.vulnerability_enricher import VulnerabilityEnricher, get_enricher
 from api.project_manager import get_project_manager, ProjectManager
 
+# Import scan parsers
+from src.parsers import NmapParser, NessusParser
+
 app = FastAPI(
     title="VulnAI - AI-Powered Vulnerability Analysis",
     description="Scan code for vulnerabilities using AI. No pre-loaded data - only findings from your scans.",
@@ -75,11 +78,52 @@ mitre_client: Optional[MITREClient] = None
 vulnerability_enricher: Optional[VulnerabilityEnricher] = None
 project_manager: Optional[ProjectManager] = None
 
+# Scan parsers
+nmap_parser: Optional[NmapParser] = None
+nessus_parser: Optional[NessusParser] = None
+
 # Scan jobs tracking
 scan_jobs: Dict[str, Dict[str, Any]] = {}
 
 # Background fetch jobs
 fetch_jobs: Dict[str, Dict[str, Any]] = {}
+
+
+def _detect_scan_type(filename: str, content: bytes) -> str:
+    """Auto-detect scan type from filename and content."""
+    filename_lower = filename.lower()
+
+    # Check by extension
+    if filename_lower.endswith('.nessus'):
+        return 'nessus'
+    if filename_lower.endswith('.nmap'):
+        return 'nmap'
+
+    # Check content for XML signatures
+    try:
+        content_str = content.decode('utf-8', errors='ignore')[:2000]
+
+        if '<!DOCTYPE nmaprun' in content_str or '<nmaprun' in content_str:
+            return 'nmap'
+        if '<NessusClientData' in content_str or '<Report name=' in content_str:
+            return 'nessus'
+
+        # Check for JSON formats
+        if content_str.strip().startswith('{') or content_str.strip().startswith('['):
+            if '"nmaprun"' in content_str or '"scaninfo"' in content_str:
+                return 'nmap'
+            if '"plugin' in content_str.lower() or '"severity"' in content_str:
+                return 'nessus'
+    except:
+        pass
+
+    # Default based on extension
+    if filename_lower.endswith('.xml'):
+        return 'nmap'  # Default XML to nmap
+    if filename_lower.endswith('.json'):
+        return 'nessus'  # Default JSON to nessus
+
+    return 'unknown'
 
 
 # Pydantic models
@@ -127,6 +171,12 @@ class NVDFetchRequest(BaseModel):
 class MITREFetchRequest(BaseModel):
     """Request to fetch MITRE ATT&CK data."""
     force_refresh: bool = False
+
+
+class ScanImportRequest(BaseModel):
+    """Request to import external scan results."""
+    scan_type: Optional[str] = None  # nmap, nessus, or auto-detect
+    enrich: bool = True  # Enrich with CVE/MITRE data
 
 
 # Startup/Shutdown events
@@ -227,7 +277,7 @@ async def upload_file(file: UploadFile = File(...)):
     allowed_extensions = [
         '.py', '.js', '.ts', '.jsx', '.tsx', '.java', '.php', '.rb', '.go',
         '.c', '.cpp', '.cs', '.sql', '.html', '.xml', '.yaml', '.yml',
-        '.json', '.env', '.conf', '.ini', '.nessus', '.txt', '.md'
+        '.json', '.env', '.conf', '.ini', '.nessus', '.nmap', '.txt', '.md'
     ]
 
     file_ext = Path(file.filename).suffix.lower()
@@ -451,6 +501,224 @@ async def delete_project_file(project_id: str, file_path: str):
     return {"status": "deleted", "file": file_path}
 
 
+def _generate_python_from_scan(scan_type: str, scan_result, vulnerabilities) -> str:
+    """Generate Python code representing the scan results for AI analysis."""
+    lines = [
+        '"""',
+        f'Security Scan Results - {scan_type.upper()}',
+        f'Generated for AI vulnerability analysis',
+        '"""',
+        '',
+        '# Scan Configuration',
+        f'SCAN_TYPE = "{scan_type}"',
+        f'HOSTS_SCANNED = {len(scan_result.hosts) if hasattr(scan_result, "hosts") else 0}',
+        '',
+        '# Discovered Hosts',
+        'hosts = ['
+    ]
+
+    if hasattr(scan_result, 'hosts'):
+        for host in scan_result.hosts:
+            lines.append(f'    "{host.ip}",  # {getattr(host, "hostname", "") or "unknown"}')
+    lines.append(']')
+    lines.append('')
+
+    lines.append('# Discovered Vulnerabilities')
+    lines.append('vulnerabilities = [')
+
+    for vuln in vulnerabilities:
+        lines.append('    {')
+        lines.append(f'        "title": """{vuln.title}""",')
+        lines.append(f'        "severity": "{vuln.severity.value}",')
+        lines.append(f'        "cvss_score": {vuln.cvss_score},')
+        lines.append(f'        "host": "{vuln.affected_host}",')
+        lines.append(f'        "port": {vuln.affected_port},')
+        lines.append(f'        "service": "{vuln.affected_service}",')
+        if vuln.cve_id:
+            lines.append(f'        "cve": "{vuln.cve_id}",')
+        if vuln.description:
+            desc = vuln.description.replace('"""', '\\"\\"\\"').replace('\n', ' ')[:500]
+            lines.append(f'        "description": """{desc}""",')
+        if vuln.remediation:
+            rem = vuln.remediation.replace('"""', '\\"\\"\\"').replace('\n', ' ')[:300]
+            lines.append(f'        "remediation": """{rem}""",')
+        lines.append('    },')
+
+    lines.append(']')
+    lines.append('')
+    lines.append('# Security Issues Summary')
+    lines.append(f'TOTAL_VULNERABILITIES = {len(vulnerabilities)}')
+
+    # Count by severity
+    severity_counts = {}
+    for v in vulnerabilities:
+        sev = v.severity.value
+        severity_counts[sev] = severity_counts.get(sev, 0) + 1
+
+    lines.append(f'CRITICAL_COUNT = {severity_counts.get("critical", 0)}')
+    lines.append(f'HIGH_COUNT = {severity_counts.get("high", 0)}')
+    lines.append(f'MEDIUM_COUNT = {severity_counts.get("medium", 0)}')
+    lines.append(f'LOW_COUNT = {severity_counts.get("low", 0)}')
+
+    return '\n'.join(lines)
+
+
+@app.post("/api/projects/{project_id}/import-scan")
+async def import_scan_to_project(
+    project_id: str,
+    file: UploadFile = File(...),
+    enrich: bool = Form(True)
+):
+    """
+    Import a Nmap or Nessus scan file into a project.
+
+    1. Parses the XML scan file
+    2. Generates a temporary .py file with vulnerabilities
+    3. Runs AI analysis on the .py file
+    4. Deletes the .py file after analysis
+    """
+    project = project_manager.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    global nmap_parser, nessus_parser
+
+    # Initialize parsers if needed
+    if nmap_parser is None:
+        nmap_parser = NmapParser()
+    if nessus_parser is None:
+        nessus_parser = NessusParser()
+
+    # Read file content
+    content = await file.read()
+
+    # Detect scan type
+    scan_type = _detect_scan_type(file.filename, content)
+
+    if scan_type == 'unknown':
+        return {
+            "status": "error",
+            "message": "File not recognized as Nmap or Nessus scan."
+        }
+
+    # Save XML temporarily to parse
+    temp_xml_path = UPLOAD_DIR / f"temp_{uuid.uuid4().hex[:8]}_{file.filename}"
+    with open(temp_xml_path, 'wb') as f:
+        f.write(content)
+
+    try:
+        # Parse the scan file
+        if scan_type == 'nmap':
+            scan_result = nmap_parser.parse_file(str(temp_xml_path))
+            vulnerabilities = nmap_parser.extract_vulnerabilities(scan_result)
+        else:  # nessus
+            scan_result = nessus_parser.parse_file(str(temp_xml_path))
+            vulnerabilities = nessus_parser.extract_vulnerabilities(scan_result)
+
+        if not vulnerabilities:
+            return {
+                "status": "completed",
+                "scan_type": scan_type,
+                "vulnerabilities_found": 0,
+                "message": "Scan parsed but no vulnerabilities found."
+            }
+
+        # Generate Python file from scan results
+        py_content = _generate_python_from_scan(scan_type, scan_result, vulnerabilities)
+
+        # Save .py file to project for AI analysis
+        base_name = Path(file.filename).stem
+        py_filename = f"{base_name}_scan.py"
+        py_path = Path(f"data/projects/{project_id}") / py_filename
+        py_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(py_path, 'w', encoding='utf-8') as f:
+            f.write(py_content)
+
+        logger.info(f"Generated {py_filename} for AI analysis")
+
+        # Run AI scan on the generated .py file
+        ai_vulns = []
+        try:
+            ai_vulns = ai_scanner.scan_file(str(py_path))
+            logger.info(f"AI scan found {len(ai_vulns)} additional findings")
+
+            for v in ai_vulns:
+                v["source_file"] = py_filename
+        except Exception as e:
+            logger.warning(f"AI scan failed: {e}")
+
+        # Delete the .py file after analysis
+        if py_path.exists():
+            py_path.unlink()
+            logger.info(f"Deleted temporary file {py_filename}")
+
+        # Convert parsed vulnerabilities to dicts
+        vuln_dicts = []
+        for vuln in vulnerabilities:
+            vuln_dict = vuln.to_dict()
+            vuln_dict['affected_file'] = f"{vuln_dict.get('affected_host', 'unknown')}:{vuln_dict.get('affected_port', 0)}"
+            vuln_dicts.append(vuln_dict)
+
+        # Enrich if requested
+        enriched_count = 0
+        if enrich and vulnerability_enricher and vuln_dicts:
+            for i, vuln_dict in enumerate(vuln_dicts):
+                try:
+                    result = vulnerability_enricher.enrich_vulnerability(vuln_dict)
+                    vuln_dicts[i] = vulnerability_enricher.to_enriched_vulnerability(result)
+                    enriched_count += 1
+                except Exception as e:
+                    logger.warning(f"Failed to enrich vulnerability: {e}")
+
+        # Combine parsed vulns + AI findings
+        all_vulns = vuln_dicts + ai_vulns
+
+        # Add to data manager
+        if all_vulns:
+            data_manager.add_vulnerabilities(all_vulns)
+
+        # Record scan
+        scan_record = {
+            "id": str(uuid.uuid4())[:8],
+            "type": f"{scan_type}_import",
+            "project_id": project_id,
+            "filename": file.filename,
+            "scanner": scan_type,
+            "hosts_scanned": len(scan_result.hosts) if hasattr(scan_result, 'hosts') else 0,
+            "vulnerabilities_parsed": len(vuln_dicts),
+            "vulnerabilities_ai": len(ai_vulns),
+            "vulnerabilities_enriched": enriched_count,
+            "imported_at": datetime.now().isoformat()
+        }
+        data_manager.add_scan_record(scan_record)
+
+        # Update project stats
+        project_manager.record_scan(project_id, len(all_vulns))
+
+        return {
+            "status": "imported",
+            "scan_type": scan_type,
+            "hosts_found": len(scan_result.hosts) if hasattr(scan_result, 'hosts') else 0,
+            "vulnerabilities_parsed": len(vuln_dicts),
+            "vulnerabilities_ai": len(ai_vulns),
+            "vulnerabilities_total": len(all_vulns),
+            "vulnerabilities_enriched": enriched_count,
+            "message": f"Imported {len(all_vulns)} vulnerabilities from {scan_type.upper()} scan."
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to parse {scan_type} scan: {e}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to parse {scan_type} scan: {str(e)}"
+        )
+    finally:
+        # Clean up temp XML file
+        if temp_xml_path.exists():
+            temp_xml_path.unlink()
+
+
 # ============================================
 # Scan Endpoints
 # ============================================
@@ -505,6 +773,7 @@ async def run_ai_scan(job_id: str, request: ScanRequest):
         job["progress"] = 10
 
         all_vulnerabilities = []
+        scan_files_to_process = []  # .nessus and .nmap files
 
         # Get files to scan
         if request.project_id:
@@ -515,6 +784,14 @@ async def run_ai_scan(job_id: str, request: ScanRequest):
                 request.file_ids if request.file_ids else None
             )
             scan_source = f"project:{request.project_id}"
+
+            # Also look for .nessus and .nmap files in the project
+            project_dir = Path(f"data/projects/{request.project_id}")
+            if project_dir.exists():
+                for ext in ['.nessus', '.nmap']:
+                    for scan_file in project_dir.glob(f"*{ext}"):
+                        scan_files_to_process.append(scan_file)
+                        logger.info(f"[MAIN] Found scan file: {scan_file.name}")
         else:
             # Legacy: scan from uploads directory
             logger.info(f"[MAIN] Looking for files in: {UPLOAD_DIR}")
@@ -529,9 +806,65 @@ async def run_ai_scan(job_id: str, request: ScanRequest):
                 files_to_scan = list(UPLOAD_DIR.glob("*"))
             scan_source = "uploads"
 
-        logger.info(f"[MAIN] Found {len(files_to_scan)} files to scan from {scan_source}: {[f.name for f in files_to_scan]}")
+            # Also look for .nessus and .nmap files in uploads
+            for ext in ['.nessus', '.nmap']:
+                for scan_file in UPLOAD_DIR.glob(f"*{ext}"):
+                    scan_files_to_process.append(scan_file)
 
-        if not files_to_scan:
+        logger.info(f"[MAIN] Found {len(files_to_scan)} code files + {len(scan_files_to_process)} scan files from {scan_source}")
+
+        # Process .nessus and .nmap files first
+        if scan_files_to_process:
+            global nmap_parser, nessus_parser
+            if nmap_parser is None:
+                nmap_parser = NmapParser()
+            if nessus_parser is None:
+                nessus_parser = NessusParser()
+
+            job["message"] = "Processing scan files (Nmap/Nessus)..."
+
+            for scan_file in scan_files_to_process:
+                try:
+                    logger.info(f"[MAIN] Processing scan file: {scan_file.name}")
+                    ext = scan_file.suffix.lower()
+
+                    # Parse the scan file
+                    if ext == '.nmap' or (ext == '.xml' and 'nmap' in scan_file.name.lower()):
+                        scan_result = nmap_parser.parse_file(str(scan_file))
+                        vulnerabilities = nmap_parser.extract_vulnerabilities(scan_result)
+                        scan_type = 'nmap'
+                    else:  # .nessus
+                        scan_result = nessus_parser.parse_file(str(scan_file))
+                        vulnerabilities = nessus_parser.extract_vulnerabilities(scan_result)
+                        scan_type = 'nessus'
+
+                    logger.info(f"[MAIN] Parsed {len(vulnerabilities)} vulnerabilities from {scan_file.name}")
+
+                    # Convert to dicts and add to all_vulnerabilities
+                    for vuln in vulnerabilities:
+                        vuln_dict = vuln.to_dict()
+                        vuln_dict['affected_file'] = f"{vuln_dict.get('affected_host', 'unknown')}:{vuln_dict.get('affected_port', 0)}"
+                        vuln_dict['source_file'] = scan_file.name
+                        vuln_dict['scan_type'] = scan_type
+                        all_vulnerabilities.append(vuln_dict)
+
+                    # Generate .py file for AI analysis
+                    if vulnerabilities:
+                        py_content = _generate_python_from_scan(scan_type, scan_result, vulnerabilities)
+                        py_filename = f"{scan_file.stem}_scan.py"
+                        py_path = scan_file.parent / py_filename
+
+                        with open(py_path, 'w', encoding='utf-8') as f:
+                            f.write(py_content)
+
+                        # Add to files_to_scan for AI analysis
+                        files_to_scan.append(py_path)
+                        logger.info(f"[MAIN] Generated {py_filename} for AI analysis")
+
+                except Exception as e:
+                    logger.error(f"[MAIN] Failed to process scan file {scan_file.name}: {e}")
+
+        if not files_to_scan and not all_vulnerabilities:
             logger.warning("[MAIN] No files to scan!")
             job["status"] = "completed"
             job["progress"] = 100
@@ -603,6 +936,14 @@ async def run_ai_scan(job_id: str, request: ScanRequest):
         job["message"] = f"Scan complete. Found {len(all_vulnerabilities)} vulnerabilities."
         job["completed_at"] = datetime.now().isoformat()
 
+        # Clean up generated .py files from scan imports
+        if scan_files_to_process:
+            for scan_file in scan_files_to_process:
+                py_path = scan_file.parent / f"{scan_file.stem}_scan.py"
+                if py_path.exists():
+                    py_path.unlink()
+                    logger.info(f"[MAIN] Deleted temporary file {py_path.name}")
+
     except Exception as e:
         job["status"] = "failed"
         job["error"] = str(e)
@@ -621,6 +962,230 @@ async def get_scan_status(job_id: str):
 async def get_scan_history():
     """Get scan history."""
     return {"scans": data_manager.get_scan_history()}
+
+
+# ============================================
+# External Scan Import Endpoints (Nmap/Nessus)
+# ============================================
+
+@app.post("/api/scan/import")
+async def import_scan(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    scan_type: Optional[str] = Form(None),
+    enrich: bool = Form(True)
+):
+    """
+    Import and parse external scan results (Nmap or Nessus).
+
+    Accepts:
+    - Nmap XML files (.xml)
+    - Nmap JSON files (.json)
+    - Nessus files (.nessus)
+    - Nessus JSON exports (.json)
+
+    The scan type is auto-detected from the file content, or can be
+    specified explicitly with scan_type parameter.
+    """
+    global nmap_parser, nessus_parser
+
+    # Initialize parsers if needed
+    if nmap_parser is None:
+        nmap_parser = NmapParser()
+    if nessus_parser is None:
+        nessus_parser = NessusParser()
+
+    # Read file content
+    content = await file.read()
+
+    # Detect or validate scan type
+    detected_type = _detect_scan_type(file.filename, content)
+
+    if scan_type:
+        scan_type = scan_type.lower()
+        if scan_type not in ['nmap', 'nessus']:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid scan_type '{scan_type}'. Use 'nmap' or 'nessus'."
+            )
+    else:
+        scan_type = detected_type
+
+    if scan_type == 'unknown':
+        raise HTTPException(
+            status_code=400,
+            detail="Could not detect scan type. Please specify scan_type='nmap' or 'nessus'."
+        )
+
+    # Save file temporarily
+    temp_path = UPLOAD_DIR / f"import_{uuid.uuid4().hex[:8]}_{file.filename}"
+    with open(temp_path, 'wb') as f:
+        f.write(content)
+
+    try:
+        # Parse the scan file
+        if scan_type == 'nmap':
+            scan_result = nmap_parser.parse_file(str(temp_path))
+            vulnerabilities = nmap_parser.extract_vulnerabilities(scan_result)
+        else:  # nessus
+            scan_result = nessus_parser.parse_file(str(temp_path))
+            vulnerabilities = nessus_parser.extract_vulnerabilities(scan_result)
+
+        # Convert Vulnerability objects to dicts for data_manager
+        vuln_dicts = []
+        for vuln in vulnerabilities:
+            vuln_dict = vuln.to_dict()
+            # Ensure we have an affected_file field for UI compatibility
+            if not vuln_dict.get('affected_file'):
+                vuln_dict['affected_file'] = f"{vuln_dict.get('affected_host', 'unknown')}:{vuln_dict.get('affected_port', 0)}"
+            vuln_dicts.append(vuln_dict)
+
+        # Enrich vulnerabilities if requested
+        enriched_count = 0
+        if enrich and vulnerability_enricher and vuln_dicts:
+            for i, vuln_dict in enumerate(vuln_dicts):
+                try:
+                    result = vulnerability_enricher.enrich_vulnerability(vuln_dict)
+                    vuln_dicts[i] = vulnerability_enricher.to_enriched_vulnerability(result)
+                    enriched_count += 1
+                except Exception as e:
+                    logger.warning(f"Failed to enrich vulnerability: {e}")
+
+        # Add to data manager
+        if vuln_dicts:
+            data_manager.add_vulnerabilities(vuln_dicts)
+
+        # Record scan
+        scan_record = {
+            "id": str(uuid.uuid4())[:8],
+            "type": f"{scan_type}_import",
+            "filename": file.filename,
+            "scanner": scan_type,
+            "hosts_scanned": len(scan_result.hosts) if hasattr(scan_result, 'hosts') else 0,
+            "vulnerabilities_found": len(vuln_dicts),
+            "vulnerabilities_enriched": enriched_count,
+            "imported_at": datetime.now().isoformat()
+        }
+        data_manager.add_scan_record(scan_record)
+
+        return {
+            "status": "imported",
+            "scan_type": scan_type,
+            "filename": file.filename,
+            "hosts_found": len(scan_result.hosts) if hasattr(scan_result, 'hosts') else 0,
+            "vulnerabilities_found": len(vuln_dicts),
+            "vulnerabilities_enriched": enriched_count,
+            "message": f"Successfully imported {len(vuln_dicts)} vulnerabilities from {scan_type.upper()} scan."
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to parse {scan_type} scan: {e}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to parse {scan_type} scan: {str(e)}"
+        )
+    finally:
+        # Clean up temp file
+        if temp_path.exists():
+            temp_path.unlink()
+
+
+@app.post("/api/scan/import/multiple")
+async def import_multiple_scans(
+    files: List[UploadFile] = File(...),
+    enrich: bool = Form(True)
+):
+    """
+    Import multiple scan files at once.
+
+    Auto-detects the type of each file (Nmap or Nessus).
+    """
+    results = []
+    total_vulns = 0
+
+    for file in files:
+        try:
+            # Re-read the file for each upload
+            content = await file.read()
+            await file.seek(0)  # Reset for potential re-read
+
+            # Create a mock request and call import_scan logic inline
+            detected_type = _detect_scan_type(file.filename, content)
+
+            if detected_type == 'unknown':
+                results.append({
+                    "filename": file.filename,
+                    "status": "skipped",
+                    "error": "Unknown scan type"
+                })
+                continue
+
+            # Process inline (simplified version)
+            global nmap_parser, nessus_parser
+            if nmap_parser is None:
+                nmap_parser = NmapParser()
+            if nessus_parser is None:
+                nessus_parser = NessusParser()
+
+            temp_path = UPLOAD_DIR / f"import_{uuid.uuid4().hex[:8]}_{file.filename}"
+            with open(temp_path, 'wb') as f:
+                f.write(content)
+
+            try:
+                if detected_type == 'nmap':
+                    scan_result = nmap_parser.parse_file(str(temp_path))
+                    vulnerabilities = nmap_parser.extract_vulnerabilities(scan_result)
+                else:
+                    scan_result = nessus_parser.parse_file(str(temp_path))
+                    vulnerabilities = nessus_parser.extract_vulnerabilities(scan_result)
+
+                vuln_dicts = []
+                for vuln in vulnerabilities:
+                    vuln_dict = vuln.to_dict()
+                    if not vuln_dict.get('affected_file'):
+                        vuln_dict['affected_file'] = f"{vuln_dict.get('affected_host', 'unknown')}:{vuln_dict.get('affected_port', 0)}"
+                    vuln_dicts.append(vuln_dict)
+
+                enriched_count = 0
+                if enrich and vulnerability_enricher and vuln_dicts:
+                    for i, vuln_dict in enumerate(vuln_dicts):
+                        try:
+                            result = vulnerability_enricher.enrich_vulnerability(vuln_dict)
+                            vuln_dicts[i] = vulnerability_enricher.to_enriched_vulnerability(result)
+                            enriched_count += 1
+                        except:
+                            pass
+
+                if vuln_dicts:
+                    data_manager.add_vulnerabilities(vuln_dicts)
+
+                total_vulns += len(vuln_dicts)
+
+                results.append({
+                    "filename": file.filename,
+                    "status": "imported",
+                    "scan_type": detected_type,
+                    "vulnerabilities": len(vuln_dicts),
+                    "enriched": enriched_count
+                })
+
+            finally:
+                if temp_path.exists():
+                    temp_path.unlink()
+
+        except Exception as e:
+            results.append({
+                "filename": file.filename,
+                "status": "failed",
+                "error": str(e)
+            })
+
+    return {
+        "status": "completed",
+        "files_processed": len(files),
+        "total_vulnerabilities": total_vulns,
+        "results": results
+    }
 
 
 # ============================================

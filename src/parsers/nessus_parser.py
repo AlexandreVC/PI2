@@ -23,7 +23,8 @@ class NessusParser(BaseParser):
         1: ("low", 2.0),
         2: ("medium", 5.0),
         3: ("high", 7.5),
-        4: ("critical", 9.5)
+        4: ("critical", 9.5),
+        5: ("critical", 10.0)  # Some exports use 5 for critical
     }
 
     def parse_file(self, file_path: Union[str, Path]) -> ScanResult:
@@ -112,8 +113,13 @@ class NessusParser(BaseParser):
             port_num = int(item.get('port', 0))
             protocol = item.get('protocol', 'tcp')
             service = item.get('svc_name', '')
-            plugin_id = item.get('pluginID', '')
+            plugin_id = item.get('pluginID', item.get('pluginId', ''))
+            # Try attribute first, then child element
             plugin_name = item.get('pluginName', '')
+            if not plugin_name:
+                plugin_name_elem = item.find('plugin_name')
+                if plugin_name_elem is not None and plugin_name_elem.text:
+                    plugin_name = plugin_name_elem.text
             severity = int(item.get('severity', 0))
 
             # Create/update port entry
@@ -147,12 +153,20 @@ class NessusParser(BaseParser):
             self, item: ET.Element, host_ip: str, port: int, service: str
     ) -> Optional[Vulnerability]:
         """Parse a single ReportItem into a Vulnerability."""
-        plugin_id = item.get('pluginID', '')
+        plugin_id = item.get('pluginID', item.get('pluginId', ''))
+        # Try attribute first, then child element
         plugin_name = item.get('pluginName', '')
+        if not plugin_name:
+            plugin_name_elem = item.find('plugin_name')
+            if plugin_name_elem is not None and plugin_name_elem.text:
+                plugin_name = plugin_name_elem.text
         severity = int(item.get('severity', 0))
 
-        # Get severity info
-        severity_label, default_cvss = self.SEVERITY_MAP.get(severity, ("info", 0.0))
+        # Get severity info (treat severity >= 4 as critical if not in map)
+        if severity >= 4 and severity not in self.SEVERITY_MAP:
+            _, default_cvss = ("critical", 9.5)
+        else:
+            _, default_cvss = self.SEVERITY_MAP.get(severity, ("info", 0.0))
 
         # Extract additional fields
         description = ""
